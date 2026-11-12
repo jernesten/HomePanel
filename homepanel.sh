@@ -54,16 +54,16 @@ check_docker() {
 # --- PASO 3: Configuración (Dominio, Red y Credenciales) ---
 ask_config() {
     info "Paso 3: Configuración de HomePanel"
-    
+
     read -p "Introduce el dominio principal (ej: miempresa.com, casa.lan): " HSDOMAIN
     if [[ -z "$HSDOMAIN" ]]; then error "El dominio no puede estar vacío."; fi
-    
+
     # Detectar red de Docker de NPM
     local npm_network=""
     if docker ps --format '{{.Names}}' | grep -q "nginx-proxy-manager"; then
         npm_network=$(docker inspect nginx-proxy-manager --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || true)
     fi
-    
+
     if [ -n "$npm_network" ]; then
         info "Red de Docker detectada para NPM: $npm_network"
         read -p "¿Usar esta red para HomePanel? (s/n) [s]: " use_npm_net
@@ -84,18 +84,20 @@ ask_config() {
     info "Configuración de la API de NPM (necesario para automatizar los hosts):"
     read -p "Email de administrador de NPM [admin@example.com]: " NPM_USER
     NPM_USER=${NPM_USER:-admin@example.com}
-    
+
     read -s -p "Contraseña de administrador de NPM: " NPM_PASS
     echo ""
     if [[ -z "$NPM_PASS" ]]; then error "La contraseña de NPM no puede estar vacía."; fi
 
-    # Guardar todo en .env
+    # Guardar todo en .env, incluyendo UID y GID
     cat <<EOF > .env
 HSDOMAIN=$HSDOMAIN
 HSNET=$HSNET
 HSAUTH_PASS=$HSAUTH_PASS
 NPM_USER=$NPM_USER
 NPM_PASS=$NPM_PASS
+UID=$(id -u)
+GID=$(id -g)
 EOF
     log "Configuración guardada en .env"
 }
@@ -103,7 +105,7 @@ EOF
 # --- PASO 4: Instalar Stack LEMP ---
 install_lemp() {
     info "Paso 4: Generando e instalando el stack LEMP..."
-    
+
     # Asegurar que la red externa existe antes de levantar docker-compose
     if ! docker network ls --format '{{.Name}}' | grep -q "^$HSNET$"; then
         warn "La red Docker '$HSNET' no existe. Creándola..."
@@ -134,6 +136,7 @@ services:
   php:
     image: php:8.2-fpm-alpine
     container_name: homepanel-php
+    user: "\${UID:-1000}:\${GID:-1000}"
     volumes:
       - ./www:/var/www/html
     networks:
@@ -172,7 +175,7 @@ EOF
 # --- PASO 5: Configurar NPM y App Web ---
 setup_npm_and_app() {
     info "Paso 5: Configurando la App Web y NPM..."
-    
+
     mkdir -p conf.d www "www/servers.$HSDOMAIN"
 
     # 1. Crear el index.php de la App (esqueleto)
@@ -210,12 +213,12 @@ EOF
 
     # Recargar Nginx para aplicar el nuevo .conf
     docker exec homepanel-nginx nginx -s reload
-    
+
     # 4. Crear Proxy Host en NPM
     info "Creando Proxy Host en NPM para servers.$HSDOMAIN..."
-    
+
     local npm_url="http://nginx-proxy-manager:81"
-    
+
     # Autenticación en NPM (usando las credenciales guardadas)
     local token=$(curl -s -X POST "$npm_url/api/tokens" \
         -H "Content-Type: application/json" \
@@ -256,13 +259,12 @@ EOF
     log "Certificado wildcard generado en ./ssl"
 }
 
-# --- PASO 6: Instalar CLI (Opcional) ---
+# --- PASO 6: Instalar CLI ---
 install_cli() {
     info "Paso 6: Instalando script CLI 'servers'..."
-    # Aquí iría el curl real a tu repo
-    # curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/main/servers -o /usr/local/bin/servers
-    # chmod +x /usr/local/bin/servers
-    log "Comando 'servers' instalado (simulado)."
+    curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/main/servers -o /usr/local/bin/servers
+    chmod +x /usr/local/bin/servers
+    log "Comando 'servers' instalado."
 }
 
 # Ejecución
