@@ -16,6 +16,19 @@ El objetivo es simple: **tú solo te preocupas por tu código, HomePanel se preo
 *   **Sistema de Plugins:** Soporte listo para instalar Joomla (limpio o con restauración de Akeeba Backup en JPA/ZIP), Pico CMS, WordPress y más.
 *   **Certificados Wildcard Autofirmados:** Genera automáticamente certificados SSL para tu dominio principal y todos sus subdominios, evitando advertencias en tu red local.
 
+## 🚦 Estado del Proyecto
+
+| Componente | Estado | Descripción |
+| :--- | :---: | :--- |
+| **Instalador (`homepanel.sh`)** | ✅ | Despliegue del stack LEMP, configuración de red y NPM. |
+| **Script CLI (`servers`)** | ✅ | Creación de sitios (Estático, Joomla, Pico, Akeeba). |
+| **App Web (Interfaz Gráfica)** | 🚧 | En desarrollo. Interfaz visual para gestionar sitios. |
+| **Sistema de Plugins** | 📅 | Planeado para la App Web (extensibilidad de CMS). |
+| **Certificados SSL Wildcard** | ✅ | Generación de certificados autofirmados. |
+| **Base de Datos Automática** | ✅ | Creación de usuarios y BD desde el CLI. |
+| **Akeeba Backup (ZIP/JPA)** | ✅ | Interfaz web para subir y extraer backups. |
+| **Documentación** | 📝 | README y guías de uso en progreso. |
+
 ## 🛠️ Requisitos previos
 
 *   Un servidor Linux (probado en Debian/Ubuntu).
