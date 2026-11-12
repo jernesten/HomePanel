@@ -33,16 +33,16 @@ crear_base_de_datos() {
     local db_name="$1"
     local db_user="${db_name}_user"
     local db_pass=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-16) # Genera contraseña aleatoria
-    
+
     info "Creando base de datos '$db_name' y usuario '$db_user'..."
-    
+
     # Ejecutamos el comando dentro del contenedor de MariaDB
     if docker exec homepanel-mariadb mysql -u root -prootpass -e \
         "CREATE DATABASE IF NOT EXISTS \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
          CREATE USER IF NOT EXISTS '$db_user'@'%' IDENTIFIED BY '$db_pass'; \
          GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'%'; \
          FLUSH PRIVILEGES;" 2>/dev/null; then
-        
+
         # Guardamos las credenciales en un archivo dentro del directorio web
         local WEB_DIR="www/${FULL_DOMAIN}"
         cat <<EOF > "$WEB_DIR/db_credentials.txt"
@@ -72,9 +72,9 @@ crear_sitio() {
 
     read -p "Introduce el nombre del subdominio (sin '.$HSDOMAIN'): " SUBDOMAIN
     if [[ -z "$SUBDOMAIN" ]]; then error "El subdominio no puede estar vacío."; fi
-    
+
     export FULL_DOMAIN="${SUBDOMAIN}.${HSDOMAIN}"
-    
+
     if [ -f "conf.d/${FULL_DOMAIN}.conf" ]; then
         error "El sitio $FULL_DOMAIN ya existe."
     fi
@@ -90,7 +90,7 @@ crear_sitio() {
     local PORT=80
     local WEB_DIR="www/${FULL_DOMAIN}"
     mkdir -p "$WEB_DIR"
-    
+
     # Crear el .conf de Nginx
     local CONF_FILE="conf.d/${FULL_DOMAIN}.conf"
     cat <<EOF > "$CONF_FILE"
@@ -118,7 +118,7 @@ EOF
     # Crear el Proxy Host en NPM
     info "Creando Proxy Host en NPM para $FULL_DOMAIN..."
     local npm_url="http://nginx-proxy-manager:81"
-    
+
     local token=$(curl -s -X POST "$npm_url/api/tokens" \
         -H "Content-Type: application/json" \
         -d "{\"identity\": \"$NPM_USER\", \"secret\": \"$NPM_PASS\"}" | grep -oP '(?<="token": ")[^"]*' || true)
@@ -159,14 +159,14 @@ EOF
         2)
             info "Preparando Joomla..."
             crear_base_de_datos "${SUBDOMAIN}_db"
-            
+
             # Descargar Joomla (última versión estable)
             local JOOMLA_URL="https://downloads.joomla.org/cms/joomla5/5-1-2/Joomla_5-1-2-Stable-Full_Package.zip"
             info "Descargando Joomla desde $JOOMLA_URL..."
             wget -q "$JOOMLA_URL" -O /tmp/joomla.zip
             unzip -q /tmp/joomla.zip -d "$WEB_DIR"
             rm /tmp/joomla.zip
-            
+
             # Crear configuration.php básico (Joomla pedirá completarlo en el instalador)
             cat <<EOF > "$WEB_DIR/configuration.php"
 <?php
@@ -188,7 +188,7 @@ EOF
             wget -q "$PICO_URL" -O /tmp/pico.tar.gz
             tar -xzf /tmp/pico.tar.gz -C "$WEB_DIR" --strip-components=1
             rm /tmp/pico.tar.gz
-            
+
             # Configuración básica de Pico
             cp "$WEB_DIR/config/config.php.template" "$WEB_DIR/config/config.php" 2>/dev/null || true
             log "Pico CMS instalado."
@@ -241,8 +241,14 @@ EOF
             ;;
     esac
 
-    # Ajustar permisos (importante para PHP-FPM)
-    chown -R 1000:1000 "$WEB_DIR" 2>/dev/null || chmod -R 755 "$WEB_DIR"
+    # Ajustar permisos de forma limpia (sin chown, gracias al UID/GID compartido)
+    find "$WEB_DIR" -type d -exec chmod 755 {} \;
+    find "$WEB_DIR" -type f -exec chmod 644 {} \;
+    
+    # Si es Joomla, dar permisos de escritura al configuration.php
+    if [ -f "$WEB_DIR/configuration.php" ]; then
+        chmod 666 "$WEB_DIR/configuration.php"
+    fi
 
     log "¡Sitio $FULL_DOMAIN creado con éxito!"
     echo -e "Accede a él en: ${CYAN}http://$FULL_DOMAIN${NC}"
