@@ -20,7 +20,7 @@ check_npm() {
         warn "NPM no está corriendo."
         read -p "¿Deseas cancelar para instalarlo primero? (s/n) [s]: " cancel_install
         if [[ ! "$cancel_install" =~ ^[nN]$ ]]; then
-            info "Cancela la instalación y ejecuta el instalador de NPM primero."
+            info "Cancelando instalación. Por favor, instala NPM en el puerto 80 primero."
             exit 0
         fi
         warn "Continuando sin NPM. Los sitios no serán accesibles desde el exterior."
@@ -55,11 +55,10 @@ check_docker() {
 ask_config() {
     info "Paso 3: Configuración de HomePanel"
     
-    # Preguntar dominio principal (permitiendo cualquier extensión)
-    read -p "Introduce el dominio principal para todos los sitios (ej: miempresa.com, casa.lan): " HSDOMAIN
+    read -p "Introduce el dominio principal (ej: miempresa.com, casa.lan): " HSDOMAIN
     if [[ -z "$HSDOMAIN" ]]; then error "El dominio no puede estar vacío."; fi
     
-    # Detectar red de Docker de NPM (si existe)
+    # Detectar red de Docker de NPM
     local npm_network=""
     if docker ps --format '{{.Names}}' | grep -q "nginx-proxy-manager"; then
         npm_network=$(docker inspect nginx-proxy-manager --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || true)
@@ -77,12 +76,10 @@ ask_config() {
         read -p "Introduce el nombre de la red Docker a usar (ej: npm_default): " HSNET
     fi
 
-    # Preguntar contraseña para proteger la App Web (servers.$HSDOMAIN)
     read -s -p "Introduce una contraseña para el panel web (servers.$HSDOMAIN): " HSAUTH_PASS
     echo ""
     if [[ -z "$HSAUTH_PASS" ]]; then error "La contraseña no puede estar vacía."; fi
 
-    # Guardar en .env
     cat <<EOF > .env
 HSDOMAIN=$HSDOMAIN
 HSNET=$HSNET
@@ -95,7 +92,6 @@ EOF
 install_lemp() {
     info "Paso 4: Generando e instalando el stack LEMP..."
     
-    # Buscar puerto libre desde el 8000
     local PORT=8000
     while ss -lnt | grep -q ":$PORT "; do
         PORT=$((PORT+1))
@@ -155,29 +151,25 @@ EOF
     log "Stack LEMP levantado."
 }
 
-# --- PASO 5: Configurar NPM y SSL Wildcard ---
-setup_npm_and_ssl() {
-    info "Paso 5: Configurando NPM y certificados..."
+# --- PASO 5: Configurar NPM y App Web ---
+setup_npm_and_app() {
+    info "Paso 5: Configurando la App Web y NPM..."
     
-    # Crear directorios
-    mkdir -p conf.d www
-    
-    # Crear app web (index.php)
-    mkdir -p "www/servers.$HSDOMAIN"
+    mkdir -p conf.d www "www/servers.$HSDOMAIN"
+
+    # 1. Crear el index.php de la App (esqueleto)
     cat <<'EOF' > "www/servers.$HSDOMAIN/index.php"
 <?php
-$htpasswd_file = '/var/www/html/servers.' . getenv('HSDOMAIN') . '/.htpasswd';
-// ... lógica de la app ...
 echo "<h1>Bienvenido a HomePanel</h1>";
 echo "<p>El panel de control está funcionando.</p>";
 EOF
 
-    # Generar .htpasswd
-    local auth_string=$(printf "$HSAUTH_PASS\n")
-    # En un caso real, usarías: htpasswd -bc ...
-    echo "admin:$(openssl passwd -apr1 $HSAUTH_PASS)" > "www/servers.$HSDOMAIN/.htpasswd"
+    # 2. Crear archivo .htpasswd usando openssl
+    # Usamos 'admin' como nombre de usuario por defecto
+    local hashed_pass=$(openssl passwd -apr1 "$HSAUTH_PASS")
+    echo "admin:$hashed_pass" > "www/servers.$HSDOMAIN/.htpasswd"
 
-    # Crear el .conf de Nginx para la app
+    # 3. Crear el .conf de Nginx para la app (con autenticación básica)
     cat <<EOF > "conf.d/servers.$HSDOMAIN.conf"
 server {
     listen 80;
@@ -192,27 +184,68 @@ server {
     }
 
     location ~ \.php$ {
-        fastcgi_pass php:9000;
+        fastcgi_pass homepanel-php:9000;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
     }
 }
 EOF
 
-    # Crear proxy host en NPM (usando la API)
-    # ... (Lógica de curl a la API de NPM) ...
+    # Recargar Nginx para aplicar el nuevo .conf
+    docker exec homepanel-nginx nginx -s reload
+    
+    # 4. Crear Proxy Host en NPM (Asumiendo credenciales por defecto admin@example.com / changeme)
+    # En un caso real, el script debería preguntar estas credenciales en el Paso 3.
+    info "Creando Proxy Host en NPM para servers.$HSDOMAIN..."
+    
+    # Autenticación en NPM
+    local npm_url="http://nginx-proxy-manager:81"
+    local npm_user="admin@example.com" 
+    local npm_pass="changeme"
+    
+    local token=$(curl -s -X POST "$npm_url/api/tokens" \
+        -H "Content-Type: application/json" \
+        -d "{\"identity\": \"$npm_user\", \"secret\": \"$npm_pass\"}" | grep -oP '(?<="token": ")[^"]*')
 
-    # Generar certificado Wildcard
+    if [ -n "$token" ]; then
+        # Crear el proxy host apuntando al contenedor Nginx
+        curl -s -X POST "$npm_url/api/nginx/proxy-hosts" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"domain_names\": [\"servers.$HSDOMAIN\"],
+                \"forward_scheme\": \"http\",
+                \"forward_host\": \"homepanel-nginx\",
+                \"forward_port\": $PORT,
+                \"access_list_id\": 0,
+                \"certificate_id\": 0,
+                \"ssl_forced\": false,
+                \"meta\": {\"letsencrypt_agree\": false, \"letsencrypt_email\": \"\"},
+                \"advanced_config\": \"\",
+                \"locations\": [],
+                \"block_exploits\": true,
+                \"caching_enabled\": false,
+                \"allow_websocket_upgrade\": true,
+                \"http2_support\": false,
+                \"hsts_enabled\": false,
+                \"hsts_subdomains\": false
+            }" > /dev/null
+        log "Proxy Host creado en NPM."
+    else
+        warn "No se pudo autenticar en NPM. Crea el Proxy Host manualmente para servers.$HSDOMAIN apuntando al puerto $PORT."
+    fi
+
+    # 5. Generar Certificado Wildcard (Local)
     mkdir -p ssl
     openssl req -x509 -newkey rsa:4096 -keyout "ssl/$HSDOMAIN.key" -out "ssl/$HSDOMAIN.crt" -days 3650 -nodes -subj "/CN=*.$HSDOMAIN" -addext "subjectAltName=DNS:*.$HSDOMAIN,DNS:$HSDOMAIN"
-    
-    log "App Web configurada y protegida en: http://servers.$HSDOMAIN"
+    log "Certificado wildcard generado en ./ssl"
 }
 
 # --- PASO 6: Instalar CLI (Opcional) ---
 install_cli() {
     info "Paso 6: Instalando script CLI 'servers'..."
-    # curl -sSL https://raw.githubusercontent.com/.../servers -o /usr/local/bin/servers
+    # Aquí iría el curl real a tu repo
+    # curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/main/servers -o /usr/local/bin/servers
     # chmod +x /usr/local/bin/servers
     log "Comando 'servers' instalado (simulado)."
 }
@@ -222,8 +255,8 @@ check_npm
 check_docker
 ask_config
 install_lemp
-setup_npm_and_ssl
+setup_npm_and_app
 install_cli
 
 log "¡HomePanel instalado con éxito!"
-echo -e "Accede a tu panel en: ${CYAN}http://servers.$HSDOMAIN${NC}"
+echo -e "Accede a tu panel en: ${CYAN}http://servers.$HSDOMAIN${NC} (Usuario: admin)"
