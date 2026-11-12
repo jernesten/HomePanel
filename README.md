@@ -44,12 +44,12 @@ curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/refs/heads/main/
 
 Una vez instalado, tienes dos formas de crear un nuevo sitio:
 
-1. Vía Terminal (CLI):
+### 1. Vía Terminal (CLI):
  ```bash
 
 servers --new
 ```
 Te preguntará el nombre del subdominio (ej: blog.miempresa.lan), el puerto interno y el tipo de instalación (estático, Joomla, Pico, etc.).
 
-2. Vía Interfaz Web:
+### 2. Vía Interfaz Web:
 Accede a https://servers.domain.lan con la contraseña que configuraste durante la instalación.
