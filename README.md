@@ -12,7 +12,7 @@ El objetivo es simple: **tú solo te preocupas por tu código, HomePanel se preo
 *   **Instalación en un solo comando:** Despliega todo el stack LEMP (Nginx, PHP-FPM, MariaDB, Adminer) usando Docker Compose.
 *   **Integración total con Nginx Proxy Manager (NPM):** El instalador detecta NPM, se conecta a su red de Docker y genera automáticamente los hosts proxys para que tus sitios estén disponibles al instante.
 *   **Hosts virtuales automáticos:** Un script CLI (`servers`) te permite crear nuevos sitios (subdominios) en segundos, generando el bloque `server` de Nginx y las reglas de reescritura (SEF) necesarias.
-*   **Interfaz Web (App Maravillosa):** Accede a `servers.tudominio.com` (protegido con contraseña) para gestionar tus sitios de forma gráfica, ideal si prefieres no usar la terminal.
+*   **Interfaz Web:** Accede a `servers.tudominio.com` (protegido con contraseña) para gestionar tus sitios de forma gráfica, ideal si prefieres no usar la terminal.
 *   **Sistema de Plugins:** Soporte listo para instalar Joomla (limpio o con restauración de Akeeba Backup en JPA/ZIP), Pico CMS, WordPress y más.
 *   **Certificados Wildcard Autofirmados:** Genera automáticamente certificados SSL para tu dominio principal y todos sus subdominios, evitando advertencias en tu red local.
 
