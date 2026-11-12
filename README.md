@@ -27,7 +27,7 @@ El objetivo es simple: **tú solo te preocupas por tu código, HomePanel se preo
 Ejecuta el siguiente comando en tu servidor:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/tu-usuario/HomePanel/main/install-homepanel.sh | bash
+curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/refs/heads/main/homepanel.sh | bash
 ```
 
 **El script te guiará a través de los pasos:**
