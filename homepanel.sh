@@ -51,7 +51,7 @@ check_docker() {
     log "Docker y Compose listos."
 }
 
-# --- PASO 3: Configuración (Dominio y Red) ---
+# --- PASO 3: Configuración (Dominio, Red y Credenciales) ---
 ask_config() {
     info "Paso 3: Configuración de HomePanel"
     
@@ -80,10 +80,22 @@ ask_config() {
     echo ""
     if [[ -z "$HSAUTH_PASS" ]]; then error "La contraseña no puede estar vacía."; fi
 
+    # Preguntar credenciales de NPM para la API
+    info "Configuración de la API de NPM (necesario para automatizar los hosts):"
+    read -p "Email de administrador de NPM [admin@example.com]: " NPM_USER
+    NPM_USER=${NPM_USER:-admin@example.com}
+    
+    read -s -p "Contraseña de administrador de NPM: " NPM_PASS
+    echo ""
+    if [[ -z "$NPM_PASS" ]]; then error "La contraseña de NPM no puede estar vacía."; fi
+
+    # Guardar todo en .env
     cat <<EOF > .env
 HSDOMAIN=$HSDOMAIN
 HSNET=$HSNET
 HSAUTH_PASS=$HSAUTH_PASS
+NPM_USER=$NPM_USER
+NPM_PASS=$NPM_PASS
 EOF
     log "Configuración guardada en .env"
 }
@@ -92,6 +104,12 @@ EOF
 install_lemp() {
     info "Paso 4: Generando e instalando el stack LEMP..."
     
+    # Asegurar que la red externa existe antes de levantar docker-compose
+    if ! docker network ls --format '{{.Name}}' | grep -q "^$HSNET$"; then
+        warn "La red Docker '$HSNET' no existe. Creándola..."
+        docker network create "$HSNET"
+    fi
+
     local PORT=8000
     while ss -lnt | grep -q ":$PORT "; do
         PORT=$((PORT+1))
@@ -165,7 +183,6 @@ echo "<p>El panel de control está funcionando.</p>";
 EOF
 
     # 2. Crear archivo .htpasswd usando openssl
-    # Usamos 'admin' como nombre de usuario por defecto
     local hashed_pass=$(openssl passwd -apr1 "$HSAUTH_PASS")
     echo "admin:$hashed_pass" > "www/servers.$HSDOMAIN/.htpasswd"
 
@@ -194,18 +211,15 @@ EOF
     # Recargar Nginx para aplicar el nuevo .conf
     docker exec homepanel-nginx nginx -s reload
     
-    # 4. Crear Proxy Host en NPM (Asumiendo credenciales por defecto admin@example.com / changeme)
-    # En un caso real, el script debería preguntar estas credenciales en el Paso 3.
+    # 4. Crear Proxy Host en NPM
     info "Creando Proxy Host en NPM para servers.$HSDOMAIN..."
     
-    # Autenticación en NPM
     local npm_url="http://nginx-proxy-manager:81"
-    local npm_user="admin@example.com" 
-    local npm_pass="changeme"
     
+    # Autenticación en NPM (usando las credenciales guardadas)
     local token=$(curl -s -X POST "$npm_url/api/tokens" \
         -H "Content-Type: application/json" \
-        -d "{\"identity\": \"$npm_user\", \"secret\": \"$npm_pass\"}" | grep -oP '(?<="token": ")[^"]*')
+        -d "{\"identity\": \"$NPM_USER\", \"secret\": \"$NPM_PASS\"}" | grep -oP '(?<="token": ")[^"]*' || true)
 
     if [ -n "$token" ]; then
         # Crear el proxy host apuntando al contenedor Nginx
@@ -232,7 +246,8 @@ EOF
             }" > /dev/null
         log "Proxy Host creado en NPM."
     else
-        warn "No se pudo autenticar en NPM. Crea el Proxy Host manualmente para servers.$HSDOMAIN apuntando al puerto $PORT."
+        warn "No se pudo autenticar en NPM. Comprueba tus credenciales."
+        warn "Crea el Proxy Host manualmente para servers.$HSDOMAIN apuntando al puerto $PORT."
     fi
 
     # 5. Generar Certificado Wildcard (Local)
