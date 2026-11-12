@@ -32,12 +32,12 @@ curl -sSL https://raw.githubusercontent.com/tu-usuario/HomePanel/main/install-ho
 
 **El script te guiará a través de los pasos:**
 
-    * Verificación de NPM.
-    * Instalación de Docker (si es necesario).
-    * Configuración del dominio principal (ej: miempresa.lan) y la red de Docker.
-    * Despliegue del stack LEMP.
-    * Configuración de la App Web y los certificados SSL.
-    * Instalación del comando CLI servers.
+*   Verificación de NPM.
+*   Instalación de Docker (si es necesario).
+*   Configuración del dominio principal (ej: miempresa.lan) y la red de Docker.
+*   Despliegue del stack LEMP.
+*   Configuración de la App Web y los certificados SSL.
+*   Instalación del comando CLI servers.
 
 
 # 💻 Uso
