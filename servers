@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Colores
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log() { printf '%b\n' "${GREEN}[OK]${NC} $*"; }
+warn() { printf '%b\n' "${YELLOW}[WARN]${NC} $*"; }
+error() { printf '%b\n' "${RED}[ERROR]${NC} $*"; exit 1; }
+info() { printf '%b\n' "${CYAN}[INFO]${NC} $*"; }
+
+# --- CARGAR VARIABLES DE ENTORNO ---
+# Buscamos el archivo .env en el directorio actual o en el directorio donde reside el script
+if [ -f "./.env" ]; then
+    source ./.env
+elif [ -f "$(dirname "$0")/.env" ]; then
+    source "$(dirname "$0")/.env"
+else
+    error "No se encontró el archivo .env. Asegúrate de ejecutar este script desde el directorio de HomePanel o define las variables manualmente."
+fi
+
+# Comprobar que las variables necesarias existen
+: "${HSDOMAIN:?Variable HSDOMAIN no definida en .env}"
+: "${HSNET:?Variable HSNET no definida en .env}"
+: "${NPM_USER:?Variable NPM_USER no definida en .env}"
+: "${NPM_PASS:?Variable NPM_PASS no definida en .env}"
+
+# --- LÓGICA DEL SCRIPT ---
+
+crear_sitio() {
+    info "=== CREAR NUEVO SITIO EN HOMEPANEL ==="
+
+    # 1. Preguntar el nombre del subdominio
+    read -p "Introduce el nombre del subdominio (sin '.$HSDOMAIN'): " SUBDOMAIN
+    if [[ -z "$SUBDOMAIN" ]]; then error "El subdominio no puede estar vacío."; fi
+    
+    local FULL_DOMAIN="${SUBDOMAIN}.${HSDOMAIN}"
+    
+    # 2. Comprobar si el .conf ya existe
+    if [ -f "conf.d/${FULL_DOMAIN}.conf" ]; then
+        error "El sitio $FULL_DOMAIN ya existe."
+    fi
+
+    # 3. Preguntar el tipo de instalación
+    info "Selecciona el tipo de instalación:"
+    echo "  1) Sitio estático (HTML)"
+    echo "  2) Joomla (Instalador limpio)"
+    echo "  3) Pico CMS"
+    echo "  4) Restaurar Akeeba Backup (ZIP/JPA)"
+    read -p "Opción [1]: " TIPO_SITIO
+    TIPO_SITIO=${TIPO_SITIO:-1}
+
+    # 4. Buscar un puerto libre dentro del rango interno de Docker (asumiendo que el host no lo necesita)
+    # En este caso, usamos un puerto interno ficticio solo para NPM, por ejemplo 80.
+    # NPM siempre apuntará al puerto 80 del contenedor Nginx, no necesitamos puertos externos.
+    local PORT=80
+
+    # 5. Crear el directorio web
+    local WEB_DIR="www/${FULL_DOMAIN}"
+    mkdir -p "$WEB_DIR"
+    log "Directorio creado: $WEB_DIR"
+
+    # 6. Crear el archivo .conf de Nginx
+    local CONF_FILE="conf.d/${FULL_DOMAIN}.conf"
+    cat <<EOF > "$CONF_FILE"
+server {
+    listen 80;
+    server_name ${FULL_DOMAIN};
+    root /var/www/html/${FULL_DOMAIN};
+    index index.php index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \.php$ {
+        fastcgi_pass homepanel-php:9000;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+    }
+}
+EOF
+    log "Configuración de Nginx creada: $CONF_FILE"
+
+    # 7. Recargar Nginx
+    docker exec homepanel-nginx nginx -s reload
+    log "Nginx recargado."
+
+    # 8. Crear el Proxy Host en NPM
+    info "Creando Proxy Host en NPM para $FULL_DOMAIN..."
+    local npm_url="http://nginx-proxy-manager:81"
+    
+    local token=$(curl -s -X POST "$npm_url/api/tokens" \
+        -H "Content-Type: application/json" \
+        -d "{\"identity\": \"$NPM_USER\", \"secret\": \"$NPM_PASS\"}" | grep -oP '(?<="token": ")[^"]*' || true)
+
+    if [ -n "$token" ]; then
+        curl -s -X POST "$npm_url/api/nginx/proxy-hosts" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"domain_names\": [\"$FULL_DOMAIN\"],
+                \"forward_scheme\": \"http\",
+                \"forward_host\": \"homepanel-nginx\",
+                \"forward_port\": $PORT,
+                \"access_list_id\": 0,
+                \"certificate_id\": 0,
+                \"ssl_forced\": false,
+                \"meta\": {\"letsencrypt_agree\": false, \"letsencrypt_email\": \"\"},
+                \"advanced_config\": \"\",
+                \"locations\": [],
+                \"block_exploits\": true,
+                \"caching_enabled\": false,
+                \"allow_websocket_upgrade\": true,
+                \"http2_support\": false,
+                \"hsts_enabled\": false,
+                \"hsts_subdomains\": false
+            }" > /dev/null
+        log "Proxy Host creado en NPM."
+    else
+        warn "No se pudo crear el Proxy Host en NPM automáticamente. Hazlo manualmente."
+    fi
+
+    # 9. Generar el instalador según el tipo
+    case "$TIPO_SITIO" in
+        1)
+            info "Generando sitio estático..."
+            echo "<h1>Bienvenido a $FULL_DOMAIN</h1>" > "$WEB_DIR/index.html"
+            ;;
+        2)
+            info "Generando instalador de Joomla..."
+            # Aquí iría la lógica para descargar Joomla y crear el index.php
+            echo "<?php echo '<h1>Instalador de Joomla para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            ;;
+        3)
+            info "Generando instalador de Pico CMS..."
+            echo "<?php echo '<h1>Instalador de Pico CMS para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            ;;
+        4)
+            info "Preparando entorno para Akeeba Backup..."
+            echo "<?php echo '<h1>Sube tu archivo Akeeba (.zip o .jpa) para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            ;;
+        *)
+            warn "Opción no válida. Creando sitio estático por defecto."
+            echo "<h1>Bienvenido a $FULL_DOMAIN</h1>" > "$WEB_DIR/index.html"
+            ;;
+    esac
+
+    log "¡Sitio $FULL_DOMAIN creado con éxito!"
+    echo -e "Accede a él en: ${CYAN}http://$FULL_DOMAIN${NC}"
+}
+
+# --- MENÚ PRINCIPAL ---
+case "${1:-}" in
+    -n|--new)
+        crear_sitio
+        ;;
+    *)
+        info "Uso: servers [OPCIÓN]"
+        echo "  -n, --new    Crear un nuevo sitio"
+        exit 0
+        ;;
+esac
