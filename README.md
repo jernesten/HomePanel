@@ -10,6 +10,9 @@ El objetivo es simple: **tú solo te preocupas por tu código, HomePanel se preo
 ## ✨ Características principales
 
 *   **Instalación en un solo comando:** Despliega todo el stack LEMP (Nginx, PHP-FPM, MariaDB, Adminer) usando Docker Compose.
+```bash
+curl -sSL https://raw.githubusercontent.com/jernesten/HomePanel/refs/heads/main/homepanel.sh | bash
+```
 *   **Integración total con Nginx Proxy Manager (NPM):** El instalador detecta NPM, se conecta a su red de Docker y genera automáticamente los hosts proxys para que tus sitios estén disponibles al instante.
 *   **Hosts virtuales automáticos:** Un script CLI (`servers`) te permite crear nuevos sitios (subdominios) en segundos, generando el bloque `server` de Nginx y las reglas de reescritura (SEF) necesarias.
 *   **Interfaz Web:** Accede a `servers.tudominio.com` (protegido con contraseña) para gestionar tus sitios de forma gráfica, ideal si prefieres no usar la terminal.
