@@ -14,38 +14,71 @@ error() { printf '%b\n' "${RED}[ERROR]${NC} $*"; exit 1; }
 info() { printf '%b\n' "${CYAN}[INFO]${NC} $*"; }
 
 # --- CARGAR VARIABLES DE ENTORNO ---
-# Buscamos el archivo .env en el directorio actual o en el directorio donde reside el script
 if [ -f "./.env" ]; then
     source ./.env
 elif [ -f "$(dirname "$0")/.env" ]; then
     source "$(dirname "$0")/.env"
 else
-    error "No se encontró el archivo .env. Asegúrate de ejecutar este script desde el directorio de HomePanel o define las variables manualmente."
+    error "No se encontró el archivo .env. Ejecuta desde el directorio de HomePanel."
 fi
 
-# Comprobar que las variables necesarias existen
-: "${HSDOMAIN:?Variable HSDOMAIN no definida en .env}"
-: "${HSNET:?Variable HSNET no definida en .env}"
-: "${NPM_USER:?Variable NPM_USER no definida en .env}"
-: "${NPM_PASS:?Variable NPM_PASS no definida en .env}"
+: "${HSDOMAIN:?Variable HSDOMAIN no definida}"
+: "${NPM_USER:?Variable NPM_USER no definida}"
+: "${NPM_PASS:?Variable NPM_PASS no definida}"
 
-# --- LÓGICA DEL SCRIPT ---
+# --- FUNCIONES AUXILIARES ---
+
+# Función para crear una base de datos en MariaDB
+crear_base_de_datos() {
+    local db_name="$1"
+    local db_user="${db_name}_user"
+    local db_pass=$(openssl rand -base64 12 | tr -d '=+/' | cut -c1-16) # Genera contraseña aleatoria
+    
+    info "Creando base de datos '$db_name' y usuario '$db_user'..."
+    
+    # Ejecutamos el comando dentro del contenedor de MariaDB
+    if docker exec homepanel-mariadb mysql -u root -prootpass -e \
+        "CREATE DATABASE IF NOT EXISTS \`$db_name\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
+         CREATE USER IF NOT EXISTS '$db_user'@'%' IDENTIFIED BY '$db_pass'; \
+         GRANT ALL PRIVILEGES ON \`$db_name\`.* TO '$db_user'@'%'; \
+         FLUSH PRIVILEGES;" 2>/dev/null; then
+        
+        # Guardamos las credenciales en un archivo dentro del directorio web
+        local WEB_DIR="www/${FULL_DOMAIN}"
+        cat <<EOF > "$WEB_DIR/db_credentials.txt"
+==========================================
+CREDENCIALES DE BASE DE DATOS
+==========================================
+Base de datos: $db_name
+Usuario: $db_user
+Contraseña: $db_pass
+Host: homepanel-mariadb (o localhost desde dentro del contenedor)
+==========================================
+EOF
+        chmod 600 "$WEB_DIR/db_credentials.txt"
+        log "Base de datos creada. Credenciales guardadas en $WEB_DIR/db_credentials.txt"
+        export DB_NAME="$db_name"
+        export DB_USER="$db_user"
+        export DB_PASS="$db_pass"
+    else
+        warn "No se pudo crear la base de datos. Asegúrate de que el contenedor homepanel-mariadb está corriendo."
+    fi
+}
+
+# --- LÓGICA PRINCIPAL ---
 
 crear_sitio() {
     info "=== CREAR NUEVO SITIO EN HOMEPANEL ==="
 
-    # 1. Preguntar el nombre del subdominio
     read -p "Introduce el nombre del subdominio (sin '.$HSDOMAIN'): " SUBDOMAIN
     if [[ -z "$SUBDOMAIN" ]]; then error "El subdominio no puede estar vacío."; fi
     
-    local FULL_DOMAIN="${SUBDOMAIN}.${HSDOMAIN}"
+    export FULL_DOMAIN="${SUBDOMAIN}.${HSDOMAIN}"
     
-    # 2. Comprobar si el .conf ya existe
     if [ -f "conf.d/${FULL_DOMAIN}.conf" ]; then
         error "El sitio $FULL_DOMAIN ya existe."
     fi
 
-    # 3. Preguntar el tipo de instalación
     info "Selecciona el tipo de instalación:"
     echo "  1) Sitio estático (HTML)"
     echo "  2) Joomla (Instalador limpio)"
@@ -54,17 +87,11 @@ crear_sitio() {
     read -p "Opción [1]: " TIPO_SITIO
     TIPO_SITIO=${TIPO_SITIO:-1}
 
-    # 4. Buscar un puerto libre dentro del rango interno de Docker (asumiendo que el host no lo necesita)
-    # En este caso, usamos un puerto interno ficticio solo para NPM, por ejemplo 80.
-    # NPM siempre apuntará al puerto 80 del contenedor Nginx, no necesitamos puertos externos.
     local PORT=80
-
-    # 5. Crear el directorio web
     local WEB_DIR="www/${FULL_DOMAIN}"
     mkdir -p "$WEB_DIR"
-    log "Directorio creado: $WEB_DIR"
-
-    # 6. Crear el archivo .conf de Nginx
+    
+    # Crear el .conf de Nginx
     local CONF_FILE="conf.d/${FULL_DOMAIN}.conf"
     cat <<EOF > "$CONF_FILE"
 server {
@@ -84,13 +111,11 @@ server {
     }
 }
 EOF
-    log "Configuración de Nginx creada: $CONF_FILE"
+    log "Configuración de Nginx creada."
 
-    # 7. Recargar Nginx
     docker exec homepanel-nginx nginx -s reload
-    log "Nginx recargado."
 
-    # 8. Crear el Proxy Host en NPM
+    # Crear el Proxy Host en NPM
     info "Creando Proxy Host en NPM para $FULL_DOMAIN..."
     local npm_url="http://nginx-proxy-manager:81"
     
@@ -125,30 +150,99 @@ EOF
         warn "No se pudo crear el Proxy Host en NPM automáticamente. Hazlo manualmente."
     fi
 
-    # 9. Generar el instalador según el tipo
+    # --- GENERACIÓN DE CONTENIDO SEGÚN TIPO ---
     case "$TIPO_SITIO" in
         1)
-            info "Generando sitio estático..."
             echo "<h1>Bienvenido a $FULL_DOMAIN</h1>" > "$WEB_DIR/index.html"
+            log "Sitio estático listo."
             ;;
         2)
-            info "Generando instalador de Joomla..."
-            # Aquí iría la lógica para descargar Joomla y crear el index.php
-            echo "<?php echo '<h1>Instalador de Joomla para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            info "Preparando Joomla..."
+            crear_base_de_datos "${SUBDOMAIN}_db"
+            
+            # Descargar Joomla (última versión estable)
+            local JOOMLA_URL="https://downloads.joomla.org/cms/joomla5/5-1-2/Joomla_5-1-2-Stable-Full_Package.zip"
+            info "Descargando Joomla desde $JOOMLA_URL..."
+            wget -q "$JOOMLA_URL" -O /tmp/joomla.zip
+            unzip -q /tmp/joomla.zip -d "$WEB_DIR"
+            rm /tmp/joomla.zip
+            
+            # Crear configuration.php básico (Joomla pedirá completarlo en el instalador)
+            cat <<EOF > "$WEB_DIR/configuration.php"
+<?php
+class JConfig {
+    public \$dbtype = 'mysqli';
+    public \$host = 'homepanel-mariadb';
+    public \$user = '${DB_USER}';
+    public \$password = '${DB_PASS}';
+    public \$db = '${DB_NAME}';
+    public \$dbprefix = 'jos_';
+}
+EOF
+            chmod 666 "$WEB_DIR/configuration.php"
+            log "Joomla descargado y configuration.php preparado."
             ;;
         3)
-            info "Generando instalador de Pico CMS..."
-            echo "<?php echo '<h1>Instalador de Pico CMS para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            info "Preparando Pico CMS..."
+            local PICO_URL="https://github.com/picocms/Pico/releases/download/v2.1.4/pico-release-2.1.4.tar.gz"
+            wget -q "$PICO_URL" -O /tmp/pico.tar.gz
+            tar -xzf /tmp/pico.tar.gz -C "$WEB_DIR" --strip-components=1
+            rm /tmp/pico.tar.gz
+            
+            # Configuración básica de Pico
+            cp "$WEB_DIR/config/config.php.template" "$WEB_DIR/config/config.php" 2>/dev/null || true
+            log "Pico CMS instalado."
             ;;
         4)
-            info "Preparando entorno para Akeeba Backup..."
-            echo "<?php echo '<h1>Sube tu archivo Akeeba (.zip o .jpa) para $FULL_DOMAIN</h1>'; ?>" > "$WEB_DIR/index.php"
+            info "Preparando interfaz para Akeeba Backup..."
+            # Creamos un pequeño formulario PHP para subir el ZIP/JPA y descomprimirlo
+            cat <<'EOF' > "$WEB_DIR/index.php"
+<?php
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['backup'])) {
+    $target = __DIR__ . '/' . basename($_FILES['backup']['name']);
+    if (move_uploaded_file($_FILES['backup']['tmp_name'], $target)) {
+        echo "<h2>Archivo subido correctamente. Extrayendo...</h2>";
+        if (pathinfo($target, PATHINFO_EXTENSION) === 'zip') {
+            $zip = new ZipArchive;
+            if ($zip->open($target) === TRUE) {
+                $zip->extractTo(__DIR__);
+                $zip->close();
+                echo "<p>Archivo ZIP extraído. <a href='/installation/index.php'>Ir al instalador de Akeeba</a></p>";
+            } else {
+                echo "<p>Error al extraer el ZIP.</p>";
+            }
+        } else {
+            echo "<p>Archivo JPA subido. Ejecuta el Kickstart desde el navegador (próximamente).</p>";
+        }
+    } else {
+        echo "<p>Error al subir el archivo.</p>";
+    }
+    exit;
+}
+?>
+<!DOCTYPE html>
+<html>
+<head><title>Subir Backup Akeeba - <?= $_SERVER['HTTP_HOST'] ?></title></head>
+<body style="font-family: sans-serif; padding: 2rem;">
+    <h1>Restaurar Backup de Akeeba</h1>
+    <p>Sube tu archivo .zip o .jpa generado con Akeeba Backup.</p>
+    <form method="POST" enctype="multipart/form-data">
+        <input type="file" name="backup" accept=".zip,.jpa" required>
+        <button type="submit">Subir y Extraer</button>
+    </form>
+</body>
+</html>
+EOF
+            log "Interfaz de subida de Akeeba creada."
             ;;
         *)
             warn "Opción no válida. Creando sitio estático por defecto."
             echo "<h1>Bienvenido a $FULL_DOMAIN</h1>" > "$WEB_DIR/index.html"
             ;;
     esac
+
+    # Ajustar permisos (importante para PHP-FPM)
+    chown -R 1000:1000 "$WEB_DIR" 2>/dev/null || chmod -R 755 "$WEB_DIR"
 
     log "¡Sitio $FULL_DOMAIN creado con éxito!"
     echo -e "Accede a él en: ${CYAN}http://$FULL_DOMAIN${NC}"
