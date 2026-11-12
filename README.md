@@ -34,7 +34,7 @@ curl -sSL https://raw.githubusercontent.com/tu-usuario/HomePanel/main/install-ho
 
 *   Verificación de NPM.
 *   Instalación de Docker (si es necesario).
-*   Configuración del dominio principal (ej: miempresa.lan) y la red de Docker.
+*   Configuración del dominio principal (ej: domain.lan) y la red de Docker.
 *   Despliegue del stack LEMP.
 *   Configuración de la App Web y los certificados SSL.
 *   Instalación del comando CLI servers.
@@ -52,4 +52,4 @@ servers --new
 Te preguntará el nombre del subdominio (ej: blog.miempresa.lan), el puerto interno y el tipo de instalación (estático, Joomla, Pico, etc.).
 
 2. Vía Interfaz Web:
-Accede a https://servers.miempresa.lan con la contraseña que configuraste durante la instalación.
+Accede a https://servers.domain.lan con la contraseña que configuraste durante la instalación.
