@@ -40,7 +40,7 @@ curl -sSL https://raw.githubusercontent.com/tu-usuario/HomePanel/main/install-ho
 *   Instalación del comando CLI servers.
 
 
-# 💻 Uso
+## 💻 Uso
 
 Una vez instalado, tienes dos formas de crear un nuevo sitio:
 
